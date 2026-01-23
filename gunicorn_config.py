@@ -1,6 +1,5 @@
-# Gunicorn configuration
-bind = "0.0.0.0:10000"
-workers = 2
-threads = 4
+worker_class = "gthread"
+workers = 1
+threads = 8
 timeout = 120
 keepalive = 5
