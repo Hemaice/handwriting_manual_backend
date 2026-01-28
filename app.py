@@ -1,62 +1,56 @@
 from flask import Flask, request, jsonify
 import joblib
 import os
-import numpy as np
-
-# IMPORTANT — import extractor BEFORE loading model
+import pandas as pd
 from feature_extractor import ManualHandwritingFeatureExtractor
 
-# IMPORTANT — register class for pickle
-ManualHandwritingFeatureExtractor()
+# Load pickles
+model = joblib.load("personality_model.pkl")
+scaler = joblib.load("feature_scaler.pkl")
+label_scaler = joblib.load("label_scaler.pkl")
+extractor = joblib.load("feature_extractor.pkl")  # works because class is imported
 
+# Feature and trait names (must match training)
+feature_columns = [...]  # list of all features used in training
+trait_columns = ['openness', 'conscientiousness', 'extraversion', 'agreeableness', 'neuroticism']
+
+# Initialize Flask app
 app = Flask(__name__)
 
-MODEL_PATH = "handwriting_personality_model.pkl"
-model = joblib.load(MODEL_PATH)   # now this will succeed
-
-feature_extractor = ManualHandwritingFeatureExtractor()
-
-@app.route('/')
-def home():
-    return jsonify({"message": "Handwriting Personality API is running"})
-
-@app.route('/predict', methods=['POST'])
+@app.route("/predict", methods=["POST"])
 def predict():
-    if 'file' not in request.files:
-        return jsonify({"error": "No image file uploaded"}), 400
+    if "image" not in request.files:
+        return jsonify({"error": "No image uploaded"}), 400
 
-    file = request.files['file']
-    
-    if file.filename == '':
-        return jsonify({"error": "Empty file name"}), 400
+    file = request.files["image"]
+    image_path = os.path.join("/tmp", file.filename)
+    file.save(image_path)
 
-    os.makedirs("uploads", exist_ok=True)
-    upload_path = os.path.join("uploads", file.filename)
-    file.save(upload_path)
+    # Extract features
+    features = extractor.extract_features(image_path)
+    if features is None:
+        return jsonify({"error": "Could not extract features"}), 500
 
-    try:
-        features_dict = feature_extractor.extract_features(upload_path)
-        if features_dict is None:
-            return jsonify({"error": "Feature extraction failed"}), 500
+    # Convert to DataFrame
+    df = pd.DataFrame([features])
+    df = df[feature_columns]  # ensure correct order
 
-        feature_values = list(features_dict.values())
-        feature_array = np.array(feature_values).reshape(1, -1)
+    # Scale features
+    X_scaled = scaler.transform(df)
 
-        prediction = model.predict(feature_array)[0]
+    # Predict
+    y_pred_scaled = model.predict(X_scaled)
 
-        return jsonify({
-            "prediction": prediction,
-            "features_used": list(features_dict.keys())
-        })
+    # Reverse label scaling
+    y_pred = label_scaler.inverse_transform(y_pred_scaled)
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    # Prepare response
+    result = {trait: float(y_pred[0, i]) for i, trait in enumerate(trait_columns)}
+    return jsonify(result)
 
-
-@app.route('/health', methods=['GET'])
+@app.route("/health")
 def health():
-    return jsonify({"status": "ok"}), 200
-
+    return "OK", 200
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
