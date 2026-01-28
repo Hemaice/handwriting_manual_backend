@@ -1,56 +1,80 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import joblib
+import numpy as np
+import tempfile
 import os
-import pandas as pd
-from feature_extractor import ManualHandwritingFeatureExtractor
 
-# Load pickles
+# ========== LOAD MODELS ==========
+feature_extractor = joblib.load("feature_extractor.pkl")
 model = joblib.load("personality_model.pkl")
-scaler = joblib.load("feature_scaler.pkl")
+feature_scaler = joblib.load("feature_scaler.pkl")
 label_scaler = joblib.load("label_scaler.pkl")
-extractor = joblib.load("feature_extractor.pkl")  # works because class is imported
 
-# Feature and trait names (must match training)
-feature_columns = [...]  # list of all features used in training
-trait_columns = ['openness', 'conscientiousness', 'extraversion', 'agreeableness', 'neuroticism']
 
-# Initialize Flask app
+# ========== FLASK APP ==========
 app = Flask(__name__)
+CORS(app)  # allow frontend (React) to call API
 
+
+# ========== API ROUTE ==========
 @app.route("/predict", methods=["POST"])
 def predict():
-    if "image" not in request.files:
-        return jsonify({"error": "No image uploaded"}), 400
+    try:
+        # Check file exists
+        if "file" not in request.files:
+            return jsonify({"error": "No file found"}), 400
 
-    file = request.files["image"]
-    image_path = os.path.join("/tmp", file.filename)
-    file.save(image_path)
+        file = request.files["file"]
 
-    # Extract features
-    features = extractor.extract_features(image_path)
-    if features is None:
-        return jsonify({"error": "Could not extract features"}), 500
+        # Save temp file
+        temp_dir = tempfile.mkdtemp()
+        file_path = os.path.join(temp_dir, file.filename)
+        file.save(file_path)
 
-    # Convert to DataFrame
-    df = pd.DataFrame([features])
-    df = df[feature_columns]  # ensure correct order
+        # Extract features
+        features = feature_extractor.extract_features(file_path)
+        if features is None:
+            return jsonify({"error": "Feature extraction failed"}), 500
 
-    # Scale features
-    X_scaled = scaler.transform(df)
+        # Convert to array (order must match training)
+        feature_vector = np.array(list(features.values())).reshape(1, -1)
 
-    # Predict
-    y_pred_scaled = model.predict(X_scaled)
+        # Scale features
+        scaled_features = feature_scaler.transform(feature_vector)
 
-    # Reverse label scaling
-    y_pred = label_scaler.inverse_transform(y_pred_scaled)
+        # Predict
+        scaled_output = model.predict(scaled_features)
 
-    # Prepare response
-    result = {trait: float(y_pred[0, i]) for i, trait in enumerate(trait_columns)}
-    return jsonify(result)
+        # Convert back to original scale
+        predictions = label_scaler.inverse_transform(scaled_output)[0]
 
-@app.route("/health")
-def health():
-    return "OK", 200
+        # Trait names (from training)
+        trait_names = label_scaler.feature_names_in_.tolist()
 
+        # Build traits dictionary
+        trait_percentages = {
+            trait_names[i]: float(predictions[i]) for i in range(len(predictions))
+        }
+
+        # Dominant trait
+        dominant_trait = max(trait_percentages, key=trait_percentages.get)
+
+        # Response to frontend
+        return jsonify({
+            "dominant_trait": dominant_trait,
+            "traits": trait_percentages
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/", methods=["GET"])
+def home():
+    return "Handwriting Personality Prediction API is running!"
+
+
+# ========== RUN SERVER ==========
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(host="0.0.0.0", port=5000, debug=True)
