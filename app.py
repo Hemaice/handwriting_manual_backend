@@ -2,12 +2,17 @@ from flask import Flask, request, jsonify
 import joblib
 import os
 import numpy as np
+
+# IMPORTANT — import extractor BEFORE loading model
 from feature_extractor import ManualHandwritingFeatureExtractor
+
+# IMPORTANT — register class for pickle
+ManualHandwritingFeatureExtractor()
 
 app = Flask(__name__)
 
 MODEL_PATH = "handwriting_personality_model.pkl"
-model = joblib.load(MODEL_PATH)
+model = joblib.load(MODEL_PATH)   # now this will succeed
 
 feature_extractor = ManualHandwritingFeatureExtractor()
 
