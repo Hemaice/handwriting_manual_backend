@@ -1,52 +1,57 @@
-import os
-import joblib
-import logging
 from flask import Flask, request, jsonify
-from flask_cors import CORS
-from werkzeug.utils import secure_filename
+import joblib
+import os
+import numpy as np
 from feature_extractor import ManualHandwritingFeatureExtractor
 
 app = Flask(__name__)
-CORS(app)
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+MODEL_PATH = "handwriting_personality_model.pkl"
+model = joblib.load(MODEL_PATH)
 
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'bmp', 'tiff'}
-extractor = ManualHandwritingFeatureExtractor()
+feature_extractor = ManualHandwritingFeatureExtractor()
 
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+@app.route('/')
+def home():
+    return jsonify({"message": "Handwriting Personality API is running"})
 
-logger.info("Loading model...")
-model = joblib.load("handwriting_personality_model.pkl")
-logger.info("Model loaded successfully.")
-
-@app.route("/predict", methods=["POST"])
+@app.route('/predict', methods=['POST'])
 def predict():
     if 'file' not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
+        return jsonify({"error": "No image file uploaded"}), 400
 
     file = request.files['file']
-    if file.filename == '' or not allowed_file(file.filename):
-        return jsonify({"error": "Invalid file"}), 400
+    
+    if file.filename == '':
+        return jsonify({"error": "Empty file name"}), 400
 
-    filename = secure_filename(file.filename)
-    filepath = os.path.join("/tmp", filename)
-    file.save(filepath)
+    os.makedirs("uploads", exist_ok=True)
+    upload_path = os.path.join("uploads", file.filename)
+    file.save(upload_path)
 
-    features = extractor.extract_features(filepath)
-    if features is None:
-        return jsonify({"error": "Feature extraction failed"}), 500
+    try:
+        features_dict = feature_extractor.extract_features(upload_path)
+        if features_dict is None:
+            return jsonify({"error": "Feature extraction failed"}), 500
 
-    input_vector = [features[k] for k in sorted(features.keys())]
+        feature_values = list(features_dict.values())
+        feature_array = np.array(feature_values).reshape(1, -1)
 
-    pred = model.predict([input_vector])[0]
-    return jsonify({"prediction": pred}), 200
+        prediction = model.predict(feature_array)[0]
 
-@app.route("/health", methods=["GET"])
+        return jsonify({
+            "prediction": prediction,
+            "features_used": list(features_dict.keys())
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/health', methods=['GET'])
 def health():
     return jsonify({"status": "ok"}), 200
 
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    app.run(host="0.0.0.0", port=5000)
